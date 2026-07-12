@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>Industrial Building Viewer - three.js</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1a1a1a; }
+  #info {
+    position: absolute; top: 10px; left: 10px;
+    color: #ddd; font-family: sans-serif; font-size: 13px;
+    background: rgba(0,0,0,0.5); padding: 10px 14px; border-radius: 6px;
+    line-height: 1.5;
+  }
+  #loading {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    color: #fff; font-family: sans-serif; font-size: 16px;
+  }
+</style>
+</head>
+<body>
+<div id="info">
+  <b>마우스 조작법</b><br/>
+  왼쪽 드래그: 카메라 회전 (Orbit)<br/>
+  오른쪽 드래그: 카메라 이동 (Pan)<br/>
+  휠: 줌인 / 줌아웃 (Zoom)
+</div>
+<div id="loading">모델 로딩 중...</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.164.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.164.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ----- 기본 씬 설정 -----
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a1a);
+
+const camera = new THREE.PerspectiveCamera(
+  50,
+  window.innerWidth / window.innerHeight,
+  0.1,
+  1000
+);
+camera.position.set(10, 8, 10);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+// ----- 조명 -----
+const ambient = new THREE.AmbientLight(0xffffff, 0.8);
+scene.add(ambient);
+
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(15, 20, 10);
+dirLight.castShadow = true;
+scene.add(dirLight);
+
+// 바닥 (모델이 없을 때도 기준점 확인용)
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(100, 100),
+  new THREE.MeshStandardMaterial({ color: 0x333333 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// ----- OrbitControls: 요청하신 3가지 동작 전부 여기서 처리됨 -----
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;      // 관성 효과 (부드러운 감속)
+controls.dampingFactor = 0.08;
+controls.screenSpacePanning = true; // 우클릭 팬을 화면 기준으로
+
+// 마우스 버튼 매핑 (기본값이지만 명시적으로 지정)
+controls.mouseButtons = {
+  LEFT: THREE.MOUSE.ROTATE,   // 1. 왼쪽 드래그 -> 회전
+  MIDDLE: THREE.MOUSE.DOLLY,  // 휠 클릭 드래그 -> 줌 (옵션)
+  RIGHT: THREE.MOUSE.PAN      // 2. 오른쪽 드래그 -> 이동(팬)
+};
+
+controls.minDistance = 2;     // 3. 휠 줌인 최소 거리
+controls.maxDistance = 200;   // 휠 줌아웃 최대 거리
+controls.maxPolarAngle = Math.PI / 2 + 0.1; // 바닥 아래로 카메라 내려가지 않도록 제한(선택)
+
+controls.target.set(0, 2, 0);
+controls.update();
+
+// ----- 모델 로드 (glTF) -----
+// 아래 경로를 실제 다운로드한 폴더 구조에 맞게 수정하세요.
+// 예: models/IBuilding49/scene.gltf (텍스처 파일들도 같은 폴더에 있어야 함)
+const loader = new GLTFLoader();
+const loadingEl = document.getElementById('loading');
+
+loader.load(
+  'models/IBuilding49/ibuilding49.gltf',
+  (gltf) => {
+    const model = gltf.scene;
+    model.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+      }
+    });
+    scene.add(model);
+    loadingEl.style.display = 'none';
+
+    // ----- 모델 크기에 맞춰 카메라 자동 조정 -----
+    const box = new THREE.Box3().setFromObject(model);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fitDistance = maxDim * 1.5; // 모델 크기의 1.5배 거리에서 바라보기
+
+    camera.position.set(
+      center.x + fitDistance,
+      center.y + fitDistance * 0.6,
+      center.z + fitDistance
+    );
+    camera.near = maxDim / 100;
+    camera.far = maxDim * 100;
+    camera.updateProjectionMatrix();
+
+    controls.target.copy(center);
+    controls.minDistance = maxDim * 0.1;
+    controls.maxDistance = maxDim * 10;
+    controls.update();
+  },
+  (xhr) => {
+    if (xhr.total) {
+      const percent = ((xhr.loaded / xhr.total) * 100).toFixed(0);
+      loadingEl.textContent = `모델 로딩 중... ${percent}%`;
+    }
+  },
+  (error) => {
+    console.error('모델 로드 실패:', error);
+    loadingEl.textContent = '모델을 불러오지 못했습니다. 경로를 확인하세요.';
+  }
+);
+
+// ----- 리사이즈 대응 -----
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ----- 렌더 루프 -----
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update(); // damping 사용 시 매 프레임 호출 필요
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
